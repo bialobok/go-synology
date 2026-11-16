@@ -21,6 +21,10 @@ type LoginRequest struct {
 	DeviceName        string `url:"device_name,omitempty"`
 	LoginType         string `url:"logintype,omitempty"`
 	TimeZone          string `url:"timezone,omitempty"`
+	// Noise handshake (noise.go): the first message, and client=browser,
+	// which DSM wants alongside it.
+	IKMessage string `url:"ik_message,omitempty"`
+	Client    string `url:"client,omitempty"`
 }
 
 type LoginResponse struct {
@@ -28,6 +32,7 @@ type LoginResponse struct {
 	SessionID    string `json:"sid"`
 	Token        string `json:"synotoken"`
 	IsPortalPort bool   `json:"is_portal_port,omitempty"`
+	IKMessage    string `json:"ik_message,omitempty"`
 }
 
 // func (l LoginRequest) EncodeValues(key string, v *url.Values) error {
