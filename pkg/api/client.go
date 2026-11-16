@@ -43,6 +43,9 @@ type Client struct {
 	username string
 	password string
 
+	// noise signs requests after a Noise login (noise.go); nil otherwise.
+	noise *noiseSession
+
 	// once sync.Once
 }
 
@@ -217,7 +220,7 @@ func (c *Client) Login(ctx context.Context, options LoginOptions) (*LoginRespons
 	username := options.Username
 	password := options.Password
 	otpSecret := options.OTPSecret
-	var token, sessionID, deviceID string
+	var token, sessionID, deviceID, ikReply string
 
 	c.username = username
 	c.password = password
@@ -230,6 +233,19 @@ func (c *Client) Login(ctx context.Context, options LoginOptions) (*LoginRespons
 		Format:          "sid",
 		EnableSynoToken: "yes",
 		TimeZone:        now.Format("-07:00"),
+	}
+
+	// Start DSM's Noise handshake when it's offered. Without it, some calls
+	// (user management) are refused with 105 even for admins.
+	c.noise = nil
+	ikMessage, err := c.startNoise(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("noise handshake: %w", err)
+	}
+	if ikMessage != "" {
+		req.IKMessage = ikMessage
+		req.Client = "browser"
+		req.Session = "webui"
 	}
 
 	if otpSecret != "" {
@@ -262,6 +278,7 @@ func (c *Client) Login(ctx context.Context, options LoginOptions) (*LoginRespons
 					fmt.Errorf("unable to login with token: %v", tmpToken),
 				)
 			} else {
+				ikReply = resp.IKMessage
 				if resp.Token != "" {
 					token = resp.Token
 				}
@@ -286,6 +303,7 @@ func (c *Client) Login(ctx context.Context, options LoginOptions) (*LoginRespons
 			}
 		}
 	} else {
+		ikReply = resp.IKMessage
 		if resp.Token != "" {
 			token = resp.Token
 		}
@@ -294,6 +312,16 @@ func (c *Client) Login(ctx context.Context, options LoginOptions) (*LoginRespons
 		}
 		if resp.DeviceID != "" {
 			deviceID = resp.DeviceID
+		}
+	}
+
+	if c.noise != nil {
+		if ikReply == "" {
+			// DSM offered the handshake but didn't finish it; sign nothing.
+			c.noise = nil
+		} else if err := c.noise.finish(ikReply); err != nil {
+			c.noise = nil
+			return nil, fmt.Errorf("noise handshake: %w", err)
 		}
 	}
 
@@ -527,6 +555,19 @@ func postEntry[TResp Response, TReq Request](
 	if c.Credentials().Token != "" {
 		req.Header.Set("X-SYNO-TOKEN", c.Credentials().Token)
 		req.Header.Set("Cookie", c.Credentials().GetCookie())
+	}
+
+	// After a Noise login, sign the request (noise.go). The session stays
+	// held until the response is in, so signed requests go one at a time.
+	if signer, ok := c.(requestSigner); ok {
+		hash, done, err := signer.beginSigned()
+		if err != nil {
+			return nil, err
+		}
+		defer done()
+		if hash != "" {
+			req.Header.Set("X-SYNO-HASH", hash)
+		}
 	}
 
 	return Do[TResp](c.Client(), req, method.ErrorSummaries)
