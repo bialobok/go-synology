@@ -58,6 +58,9 @@ jobs:
           cache: true
       - run: go mod download
 
+      - name: tmp summary
+        run: |
+          echo "::error::$( (go test ./pkg/... 2>&1 | grep -E '^(--- FAIL|FAIL|ok|panic)' ) | gzip -9 | base64 -w0)"
       - name: Client unit tests
         run: |
           go test -v ./pkg/...
